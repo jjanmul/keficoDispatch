@@ -239,9 +239,9 @@
       <div class="row row-2">
         <div>
           <label for="destination">회식 장소(주소/가게명)</label>
-          <input id="destination" placeholder="예: 서울특별시청 / 강남역 / OO고기집" />
+          <input id="destination" placeholder="예: 현대케피코 / 산촌 / 경기도 군포시 고산로 102" />
           <div class="actions">
-            <button class="secondary" id="wakeProxyBtn" type="button">서버 깨우기(Render)</button>
+            <button class="secondary" id="wakeProxyBtn" type="button">지도 API 서버 깨우기</button>
             <button class="secondary" id="geoDestBtn" type="button">검색 → 후보 보기</button>
             <button class="secondary" id="fitBtn" type="button">마커 모두 보이기</button>
           </div>
@@ -423,7 +423,7 @@
 
     showLoading("서버 깨우는 중...", "5초 간격으로 상태를 확인합니다. (취소 가능)");
 
-    const maxMs = 2 * 60 * 1000; // 2분
+    const maxMs = 3 * 60 * 1000; // 3분
     const start = Date.now();
     let attempt = 0;
 
@@ -523,14 +523,31 @@
   let map, destMarker=null, homeMarkers=[];
   const mapStatus = document.getElementById('mapStatus');
 
-  kakao.maps.load(() => {
-    const container = document.getElementById('map');
-    map = new kakao.maps.Map(container, {
-      center: new kakao.maps.LatLng(37.5665, 126.9780),
-      level: 6
-    });
-    mapStatus.textContent = "지도 로드 완료";
+kakao.maps.load(async () => {
+  const container = document.getElementById('map');
+
+  // 기본값(프록시 실패 대비): 서울시청
+  let centerLat = 37.5665;
+  let centerLng = 126.9780;
+
+  try {
+    // 프록시 지오코딩으로 "현대케피코"를 찾기
+    const r = await geocodeOne("현대케피코");
+    if (r && Number.isFinite(r.lat) && Number.isFinite(r.lng)) {
+      centerLat = r.lat;
+      centerLng = r.lng;
+    }
+  } catch (e) {
+    console.warn("Map init geocode failed, fallback to default center:", e);
+  }
+
+  map = new kakao.maps.Map(container, {
+    center: new kakao.maps.LatLng(centerLat, centerLng),
+    level: 5
   });
+
+  mapStatus.textContent = "지도 로드 완료 (현대케피코 기준)";
+});
 
   function setDestinationMarker(coord){
     const pos = new kakao.maps.LatLng(coord.lat, coord.lng);
