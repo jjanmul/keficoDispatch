@@ -51,10 +51,36 @@
     hr{border:none;border-top:1px solid var(--line);margin:14px 0}
     #map{width:100%;height:340px;border-radius:12px;border:1px solid var(--line);overflow:hidden}
     @media(min-width:1020px){#map{height:440px}}
+
+    /* Loading Overlay */
+    #loadingOverlay{
+      display:none;
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.65);
+      z-index:9999;
+      justify-content:center;
+      align-items:center;
+      flex-direction:column;
+      color:#fff;
+    }
+    .spinner{
+      border:4px solid rgba(255,255,255,.25);
+      border-radius:50%;
+      border-top:4px solid #fff;
+      width:40px;height:40px;
+      animation:spin 1s linear infinite;
+    }
+    @keyframes spin {0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
   </style>
 </head>
 
 <body>
+<!-- Loading Overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <p id="loadingMessage" style="margin-top:15px;font-size:1.05em;">진행 중...</p>
+</div>
+
 <header><div class="wrap"><h1>회식 배차 <span class="small">(카카오 지도 + 주소/키워드 지오코딩)</span></h1></div></header>
 
 <div class="wrap">
@@ -171,9 +197,20 @@
 </div>
 
 <script>
-  // ★ 여기만 Render 프록시 주소로 바꾸세요
+  // ★ 프록시 주소
   const PROXY_BASE = "https://kefico-dispatch-proxy-kakao.onrender.com";
   document.getElementById('proxyLabel').textContent = PROXY_BASE;
+
+  // Loading overlay controls
+  const loadingOverlay = document.getElementById('loadingOverlay');
+  const loadingMessage = document.getElementById('loadingMessage');
+  function showLoading(message="진행 중..."){
+    loadingMessage.textContent = message;
+    loadingOverlay.style.display = 'flex';
+  }
+  function hideLoading(){
+    loadingOverlay.style.display = 'none';
+  }
 
   async function geocode(query){
     const url = new URL("/api/geocode", PROXY_BASE);
@@ -240,14 +277,34 @@
   const elDestination=$('destination'), elName=$('name'), elRole=$('role'), elCapacity=$('capacity'),
         elHome=$('home'), elReturnRole=$('returnRole'), elCanChauffeur=$('canChauffeur');
 
-  function escapeHtml(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");}
-  function syncCapacityEnabled(){const isDriver=elRole.value==='driver'; elCapacity.disabled=!isDriver; if(!isDriver) elCapacity.value='';}
-  elRole.addEventListener('change', syncCapacityEnabled); syncCapacityEnabled();
-  function clearResults(){ $('goResult').innerHTML=''; $('goSummary').textContent=''; $('backResult').innerHTML=''; $('backSummary').textContent=''; }
+  function escapeHtml(s){
+    return String(s)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+      .replaceAll('"','&quot;').replaceAll("'","&#039;");
+  }
+  function syncCapacityEnabled(){
+    const isDriver=elRole.value==='driver';
+    elCapacity.disabled=!isDriver;
+    if(!isDriver) elCapacity.value='';
+  }
+  elRole.addEventListener('change', syncCapacityEnabled);
+  syncCapacityEnabled();
+
+  function clearResults(){
+    $('goResult').innerHTML='';
+    $('goSummary').textContent='';
+    $('backResult').innerHTML='';
+    $('backSummary').textContent='';
+  }
 
   function renderPeople(){
     const tbody=$('peopleTbody'); tbody.innerHTML='';
-    if(people.length===0){ const tr=document.createElement('tr'); tr.innerHTML=`<td colspan="8" class="small">인원을 추가해 주세요.</td>`; tbody.appendChild(tr); return; }
+    if(people.length===0){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td colspan="8" class="small">인원을 추가해 주세요.</td>`;
+      tbody.appendChild(tr);
+      return;
+    }
     for(const p of people){
       const tr=document.createElement('tr');
       const goBadge=p.goRole==='driver'?`<span class="pill ok">운전자</span>`:`<span class="pill no">승객</span>`;
@@ -261,7 +318,8 @@
         <td>${p.canChauffeur?`<span class="pill ok">가능</span>`:`<span class="pill no">불가</span>`}</td>
         <td>${p.home?escapeHtml(p.home):'<span class="small">-</span>'}</td>
         <td class="mono">${escapeHtml(coordStr)}</td>
-        <td style="text-align:right"><button class="danger" data-del="${p.id}" style="width:auto;padding:6px 10px;">삭제</button></td>`;
+        <td style="text-align:right"><button class="danger" data-del="${p.id}" style="width:auto;padding:6px 10px;">삭제</button></td>
+      `;
       tbody.appendChild(tr);
     }
     tbody.querySelectorAll('button[data-del]').forEach(btn=>{
@@ -273,8 +331,9 @@
     });
   }
 
-  // 지도/좌표 버튼
+  // 목적지 검색
   $('geoDestBtn').addEventListener('click', async ()=>{
+    showLoading("목적지를 검색 중...");
     try{
       if(!map) return alert("지도가 아직 로드되지 않았습니다.");
       const q = elDestination.value.trim();
@@ -283,25 +342,40 @@
       if(!r || !r.lat) return alert("검색 실패(주소/장소명을 더 구체적으로 입력).");
       setDestinationMarker(r);
       fitAllMarkers();
-    }catch(e){ console.error(e); alert(e.message); }
+    }catch(e){
+      console.error(e);
+      alert(e.message);
+    }finally{
+      hideLoading();
+    }
   });
 
   $('fitBtn').addEventListener('click', ()=>{ if(map) fitAllMarkers(); });
 
+  // 집 좌표 변환(진행률 표시)
   $('geoHomesBtn').addEventListener('click', async ()=>{
-    if(!map) return alert("지도가 아직 로드되지 않았습니다.");
-    const targets = people.filter(p => p.home && !p.homeCoord);
-    if(targets.length===0) return alert("좌표 변환할 대상이 없습니다.");
     try{
-      for(const p of targets){
+      if(!map) return alert("지도가 아직 로드되지 않았습니다.");
+      const targets = people.filter(p => p.home && !p.homeCoord);
+      if(targets.length===0) return alert("좌표 변환할 대상이 없습니다.");
+
+      for(let i=0;i<targets.length;i++){
+        const p = targets[i];
+        showLoading(`집 좌표 변환 중 (${i+1}/${targets.length}): ${p.name} - ${p.home}`);
         const r = await geocode(p.home);
         if(r && r.lat) p.homeCoord = { lat: r.lat, lng: r.lng };
       }
+
       renderPeople();
       refreshHomeMarkers(people);
       fitAllMarkers();
       alert("집 좌표 변환 완료(가능한 항목만).");
-    }catch(e){ console.error(e); alert(e.message); }
+    }catch(e){
+      console.error(e);
+      alert(e.message);
+    }finally{
+      hideLoading();
+    }
   });
 
   $('showHomesBtn').addEventListener('click', ()=>{ if(map){ refreshHomeMarkers(people); fitAllMarkers(); } });
@@ -323,7 +397,9 @@
     if(home) p.home=home;
 
     people.push(p);
-    elName.value=''; if(goRole==='driver') elCapacity.value=''; elHome.value='';
+    elName.value='';
+    if(goRole==='driver') elCapacity.value='';
+    elHome.value='';
     renderPeople(); clearResults();
   });
 
@@ -342,7 +418,12 @@
 
   $('clearBtn').addEventListener('click', ()=>{
     if(!confirm('전체 초기화할까요?')) return;
-    people=[]; elDestination.value=''; elName.value=''; elRole.value='passenger'; syncCapacityEnabled(); elHome.value='';
+    people=[];
+    elDestination.value='';
+    elName.value='';
+    elRole.value='passenger';
+    syncCapacityEnabled();
+    elHome.value='';
     renderPeople(); clearResults();
   });
 
@@ -356,10 +437,161 @@
     $('goPanel').style.display='none'; $('backPanel').style.display='block';
   });
 
-  // 배차 로직은 기존과 동일(출발/귀가)
-  // (지면 관계상 생략하지 않고, 위 답변의 카카오 index.html 전체를 그대로 사용하면 됩니다.)
-  // 여기서는 UI/지도/지오코딩 파트가 핵심이라 배차 부분은 기존 파일 그대로 유지하세요.
+  // 출발 배차
+  $('assignGoBtn').addEventListener('click', async ()=>{
+    showLoading("출발 배차 중...");
+    try{
+      if (people.length === 0) return alert('인원을 추가해 주세요.');
+      const drivers = people.filter(p => p.goRole === 'driver' && p.capacity > 0);
+      const passengers = people.filter(p => p.goRole === 'passenger');
+      if (drivers.length === 0) return alert('운전자가 없습니다. 출발 배차를 할 수 없습니다.');
 
+      const assignedCars = drivers.map(driver => ({
+        driver,
+        passengers: [],
+        remainingCapacity: driver.capacity - 1
+      }));
+
+      const mode = $('goMode').value;
+
+      if (mode === 'roundRobin') {
+        let currentCarIndex = 0;
+        for (const passenger of passengers) {
+          let assigned = false;
+          for (let i = 0; i < assignedCars.length; i++) {
+            const carIndex = (currentCarIndex + i) % assignedCars.length;
+            if (assignedCars[carIndex].remainingCapacity > 0) {
+              assignedCars[carIndex].passengers.push(passenger);
+              assignedCars[carIndex].remainingCapacity--;
+              assigned = true;
+              currentCarIndex = (carIndex + 1) % assignedCars.length;
+              break;
+            }
+          }
+          if (!assigned) alert(`${passenger.name} 님을 배차할 차량이 없습니다. (정원 부족)`);
+        }
+      } else {
+        for (const passenger of passengers) {
+          let assigned = false;
+          for (const car of assignedCars) {
+            if (car.remainingCapacity > 0) {
+              car.passengers.push(passenger);
+              car.remainingCapacity--;
+              assigned = true;
+              break;
+            }
+          }
+          if (!assigned) alert(`${passenger.name} 님을 배차할 차량이 없습니다. (정원 부족)`);
+        }
+      }
+
+      renderAssignmentResults(assignedCars, 'goResult', 'goSummary');
+      alert("출발 배차 완료.");
+    } catch (e) {
+      console.error(e);
+      alert(e.message);
+    } finally {
+      hideLoading();
+    }
+  });
+
+  // 귀가 배차(단순 거리 기반: 직선거리)
+  $('assignBackBtn').addEventListener('click', async ()=>{
+    showLoading("귀가 배차 중(집 좌표 확인/계산)...");
+    try{
+      if (people.length === 0) return alert('인원을 추가해 주세요.');
+
+      // 집 좌표 없으면 먼저 변환(동시에 진행)
+      const needGeo = people.filter(p => p.home && !p.homeCoord);
+      if (needGeo.length){
+        for(let i=0;i<needGeo.length;i++){
+          const p = needGeo[i];
+          showLoading(`귀가 배차: 집 좌표 변환 (${i+1}/${needGeo.length}) - ${p.name}`);
+          const r = await geocode(p.home);
+          if(r && r.lat) p.homeCoord = { lat: r.lat, lng: r.lng };
+        }
+      }
+
+      const availableDrivers = people.filter(p => p.goRole === 'driver' && p.returnRole !== 'parkAndRide' && p.homeCoord);
+      const availablePassengers = people.filter(p => p.returnRole !== 'driveOwn' && p.homeCoord);
+
+      if (availableDrivers.length === 0) return alert('귀가 운전자가 없습니다. 귀가 배차를 할 수 없습니다.');
+
+      // 거리(직선) 계산
+      const distances = {};
+      for (const driver of availableDrivers) {
+        distances[driver.id] = {};
+        for (const passenger of availablePassengers) {
+          if (driver.id === passenger.id) continue;
+          const dLat = driver.homeCoord.lat - passenger.homeCoord.lat;
+          const dLng = driver.homeCoord.lng - passenger.homeCoord.lng;
+          distances[driver.id][passenger.id] = Math.sqrt(dLat*dLat + dLng*dLng);
+        }
+      }
+
+      const backAssignedCars = availableDrivers.map(driver => ({
+        driver,
+        passengers: [],
+        remainingCapacity: driver.capacity - 1
+      }));
+
+      const unassignedPassengers = [...availablePassengers].filter(p => !availableDrivers.some(d => d.id === p.id));
+
+      while (unassignedPassengers.length > 0) {
+        let best = null;
+        for (const passenger of unassignedPassengers) {
+          for (const car of backAssignedCars) {
+            if (car.remainingCapacity <= 0) continue;
+            const dist = distances[car.driver.id]?.[passenger.id];
+            if (dist === undefined) continue;
+            if (!best || dist < best.distance) best = { car, passenger, distance: dist };
+          }
+        }
+        if (!best) break;
+        best.car.passengers.push(best.passenger);
+        best.car.remainingCapacity--;
+        unassignedPassengers.splice(unassignedPassengers.indexOf(best.passenger), 1);
+      }
+
+      if (unassignedPassengers.length > 0) {
+        alert(`다음 인원들은 귀가 배차되지 못했습니다(차량/정원 부족): ${unassignedPassengers.map(p=>p.name).join(', ')}`);
+      }
+
+      renderAssignmentResults(backAssignedCars, 'backResult', 'backSummary');
+      alert("귀가 배차 완료.");
+    } catch (e) {
+      console.error(e);
+      alert(e.message);
+    } finally {
+      hideLoading();
+    }
+  });
+
+  function renderAssignmentResults(assignedCars, resultElId, summaryElId) {
+    const resultEl = $(resultElId);
+    const summaryEl = $(summaryElId);
+    resultEl.innerHTML = '';
+    summaryEl.innerHTML = '';
+
+    if (!assignedCars.length) {
+      summaryEl.textContent = '배차 결과가 없습니다.';
+      return;
+    }
+
+    let totalPassengers = 0;
+    assignedCars.forEach(car => {
+      totalPassengers += car.passengers.length;
+      const box = document.createElement('div');
+      box.className = 'box';
+      const passengerNames = car.passengers.map(p => p.name).join(', ');
+      box.innerHTML = `<strong>${escapeHtml(car.driver.name)}</strong> (${car.driver.capacity}인승)` + (passengerNames ? ` &rarr; ${escapeHtml(passengerNames)}` : '');
+      resultEl.appendChild(box);
+    });
+
+    summaryEl.textContent = `${assignedCars.length}대의 차량에 총 ${totalPassengers}명이 배차되었습니다.`;
+  }
+
+  // Initial render
   renderPeople();
 </script>
 </body>
